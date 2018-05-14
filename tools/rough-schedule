@@ -1,0 +1,240 @@
+#!/usr/bin/env perl
+
+use v5.26;
+use strict;
+use warnings;
+use feature 'postderef', 'signatures';
+no warnings 'experimental::postderef', 'experimental::signatures';
+
+use DateTime;
+use DateTime::Format::Strptime;
+use Getopt::Long;
+use JSON::MaybeXS;
+use List::AllUtils qw( uniq );
+use LWP::Simple qw( get is_success );
+
+sub main {
+    my ( $main, $test );
+    GetOptions(
+        'main' => \$main,
+        'test' => \$test,
+    );
+
+    binmode STDOUT, ':encoding(UTF-8)';
+
+    my %speakers = _speakers($test);
+    my %sessions = _sessions( $main, $test, \%speakers );
+
+    my $list   = qq{<ul id="schedule-selector">\n};
+    my $tables = q{};
+
+    my $p = DateTime::Format::Strptime->new(
+        pattern  => '%Y-%m-%d',
+        strict   => 1,
+        on_error => 'croak',
+    );
+
+    for my $date ( sort keys %sessions ) {
+        $list
+            .= qq{<li><a href="#$date">}
+            . $p->parse_datetime($date)->format_cldr('EEEE, MMMM d')
+            . "</a></li>\n";
+
+        $tables .= qq{<div id="schedule-$date" class="schedule-container">\n};
+        $tables .= "<h3>$date</h3>\n";
+
+        my @rooms = _unique_rooms( $sessions{$date} );
+
+        $tables .= qq{<table class="schedule">\n};
+        $tables .= "<thead><tr>\n";
+        $tables .= "<td></td>\n";
+        $tables .= "<th>$_</th>\n" for @rooms;
+        $tables .= "</tr></thead>\n";
+        $tables .= "<tbody>\n";
+
+        for my $start ( sort keys $sessions{$date}->%* ) {
+            my @cur = sort _by_room $sessions{$date}{$start}->@*;
+            $tables .= "<tr>\n";
+            $tables
+                .= q{<th class="time">}
+                . ( lc $cur[0]{starts_at}->format_cldr('h:mm a') )
+                . "</th>\n";
+
+            my $col = 1;
+            for my $s (@cur) {
+                my $colspan
+                    = $s->{is_plenary} || $s->{is_break} ? scalar @rooms : 1;
+                my $class
+                    = $s->{is_plenary} ? 'plenary'
+                    : $s->{is_break}   ? 'break'
+                    : @rooms == 5      ? "col-$col-of-5"
+                    :                    "col-$col";
+                $tables
+                    .= qq{<td rowspan="1" colspan="$colspan" class="$class">}
+                    . _cell_content($s)
+                    . "</td>\n";
+                $col++;
+            }
+            $tables .= "</tr>\n";
+        }
+
+        $tables .= "</tbody></table>\n";
+        $tables .= "</div>\n\n";
+    }
+
+    $list .= "</ul>\n";
+
+    print $list . "\n" . $tables;
+}
+
+sub _speakers ($test) {
+    return map { _inflate_speaker($_) } _get( _uri( 'speaker', $test ) )->@*;
+}
+
+sub _sessions ( $main, $test, $speakers ) {
+    my @s = grep { $main ? _is_main_day($_) : 1 }
+        map { _inflate_session( $_, $speakers ) }
+        _get( _uri( 'session', $test ) )->@*;
+
+    my %s;
+    for my $s (@s) {
+        push $s{ $s->{date} }{ $s->{starts_at} }->@*, $s;
+    }
+
+    return %s;
+}
+
+{
+    my $main_start = DateTime->new(
+        year  => 2018,
+        month => 6,
+        day   => 18,
+    );
+    my $main_end = DateTime->new(
+        year  => 2018,
+        month => 6,
+        day   => 21,
+    );
+
+    sub _is_main_day ($s) {
+        return $s->{starts_at} >= $main_start && $s->{starts_at} < $main_end;
+    }
+}
+
+sub _uri ( $type, $test ) {
+    my $uri = 'https://perlconference.us/tpc-2018-slc/';
+    $uri .= 'test/' if $test;
+    $uri .= "wp-json/wp/v2/$type?per_page=100";
+    return $uri;
+}
+
+{
+    my $j = JSON::MaybeXS->new( utf8 => 1 );
+
+    sub _get($uri) {
+        my $res = get($uri);
+        die "Failed to retrieve $uri\n"
+            unless defined $res;
+        return $j->decode($res);
+    }
+}
+
+sub _inflate_speaker ( $s ) {
+    return (
+        $s->{id} => {
+            id   => $s->{id},
+            name => $s->{title}{rendered},
+            uri  => $s->{link},
+        }
+    );
+}
+
+{
+    my $p = DateTime::Format::Strptime->new(
+        pattern  => '%Y-%m-%d %H:%M:%S',
+        strict   => 1,
+        on_error => 'croak',
+    );
+
+    sub _inflate_session ( $s, $speakers ) {
+        my $dt = $p->parse_datetime( $s->{starts_at} );
+        return {
+            id        => $s->{id},
+            title     => $s->{title}{rendered},
+            room      => $s->{in_room} ? $s->{in_room}[0]{name} : q{},
+            uri       => $s->{link},
+            presenter => $s->{presented_by}
+            ? $speakers->{ $s->{presented_by}[0]{ID} }
+            : q{},
+            is_tutorial => $s->{is_tutorial},
+            is_plenary  => $s->{is_plenary} && !ref $s->{is_plenary},
+            is_break    => $s->{is_break} && !ref $s->{is_break},
+            date        => $dt->date,
+            starts_at   => $dt,
+            length      => $s->{length},
+        };
+    }
+}
+
+sub _cell_content ($s) {
+    my $c = q{};
+    $c .= qq[<a href="$s->{uri}">] unless $s->{is_break};
+    $c .= $s->{title};
+
+    my $dur = _duration( $s->{length} );
+    $c .= qq{ ($dur)};
+    $c .= q{<br>} . $s->{presenter}{name}
+        if $s->{presenter};
+    $c .= "<br><strong>$s->{room}</strong>"
+        if $s->{is_plenary};
+    $c .= "<br><strong>$s->{room}</strong>"
+        if $s->{is_break} && $s->{room};
+    $c .= "<!-- room: $s->{room} ; length: $s->{length} -->";
+    $c .= '</a>' unless $s->{is_break};
+    return $c;
+}
+
+sub _duration ($l) {
+    my ( $count, $unit )
+        = $l >= 120
+        ? ( $l / 60, 'hour' )
+        : ( $l, 'minute' );
+    $unit .= 's' unless $count == 1;
+    return "$count $unit";
+}
+
+sub _unique_rooms ($s) {
+    my @rooms;
+    for my $t ( keys $s->%* ) {
+        push @rooms, map { $_->{room} } $s->{$t}->@*;
+    }
+    return grep {
+               length
+            && $_ ne 'Grand Ballroom'
+            && $_ ne 'Ballroom Reception Area'
+    } sort _by_room uniq(@rooms);
+}
+
+{
+    my %room_order = (
+        'Grand Ballroom'          => -1,
+        'Ballroom Reception Area' => 0,
+        'Ballroom A'              => 1,
+        'Ballroom B'              => 2,
+        'Ballroom C'              => 3,
+        'Arizona'                 => 4,
+        'Idaho'                   => 5,
+        'Wyoming'                 => 6,
+        'Casper'                  => 7,
+        'Sinclair'                => 8,
+        q{}                       => 9,
+    );
+
+    sub _by_room {
+        my $ar = ref $a ? $a->{room} : $a;
+        my $br = ref $b ? $b->{room} : $b;
+        return $room_order{$ar} <=> $room_order{$br};
+    }
+}
+
+main();
