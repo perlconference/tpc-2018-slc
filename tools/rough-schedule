@@ -34,16 +34,15 @@ sub main {
         on_error => 'croak',
     );
 
-    for my $date ( sort keys %sessions ) {
+    for my $k ( sort keys %sessions ) {
+        my $date = $p->parse_datetime($k)->format_cldr('EEEE, MMMM d');
         $list
-            .= qq{<li><a href="#$date">}
-            . $p->parse_datetime($date)->format_cldr('EEEE, MMMM d')
-            . "</a></li>\n";
+            .= qq{<li><a href="#$k">$date</a></li>\n};
 
-        $tables .= qq{<div id="schedule-$date" class="schedule-container">\n};
+        $tables .= qq{<div id="schedule-$k" class="schedule-container">\n};
         $tables .= "<h3>$date</h3>\n";
 
-        my @rooms = _unique_rooms( $sessions{$date} );
+        my @rooms = _unique_rooms( $sessions{$k} );
 
         $tables .= qq{<table class="schedule">\n};
         $tables .= "<thead><tr>\n";
@@ -52,8 +51,8 @@ sub main {
         $tables .= "</tr></thead>\n";
         $tables .= "<tbody>\n";
 
-        for my $start ( sort keys $sessions{$date}->%* ) {
-            my @cur = sort _by_room $sessions{$date}{$start}->@*;
+        for my $start ( sort keys $sessions{$k}->%* ) {
+            my @cur = sort _by_room $sessions{$k}{$start}->@*;
             $tables .= "<tr>\n";
             $tables
                 .= q{<th class="time">}
