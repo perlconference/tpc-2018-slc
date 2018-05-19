@@ -36,8 +36,7 @@ sub main {
 
     for my $k ( sort keys %sessions ) {
         my $date = $p->parse_datetime($k)->format_cldr('EEEE, MMMM d');
-        $list
-            .= qq{<li><a href="#$k">$date</a></li>\n};
+        $list .= qq{<li><a href="#$k">$date</a></li>\n};
 
         $tables .= qq{<div id="schedule-$k" class="schedule-container">\n};
         $tables .= "<h3>$date</h3>\n";
@@ -61,13 +60,13 @@ sub main {
 
             my $col = 1;
             for my $s (@cur) {
+                my $room_count = scalar @rooms;
                 my $colspan
-                    = $s->{is_plenary} || $s->{is_break} ? scalar @rooms : 1;
+                    = $s->{is_plenary} || $s->{is_break} ? $room_count : 1;
                 my $class
                     = $s->{is_plenary} ? 'plenary'
                     : $s->{is_break}   ? 'break'
-                    : @rooms == 5      ? "col-$col-of-5"
-                    :                    "col-$col";
+                    :                    "col-$col-of-$room_count";
                 $tables
                     .= qq{<td rowspan="1" colspan="$colspan" class="$class">}
                     . _cell_content($s)
@@ -93,7 +92,8 @@ sub _speakers ($test) {
 sub _sessions ( $main, $test, $speakers ) {
     my @s = grep { $main ? _is_main_day($_) : 1 }
         map { _inflate_session( $_, $speakers ) }
-        _get( _uri( 'session', $test ) )->@*;
+        _get( _uri( 'session', $test ) )->@*,
+        _get( _uri( 'session', $test, 2 ) )->@*;
 
     my %s;
     for my $s (@s) {
@@ -120,10 +120,10 @@ sub _sessions ( $main, $test, $speakers ) {
     }
 }
 
-sub _uri ( $type, $test ) {
+sub _uri ( $type, $test, $page = 1 ) {
     my $uri = 'https://perlconference.us/tpc-2018-slc/';
     $uri .= 'test/' if $test;
-    $uri .= "wp-json/wp/v2/$type?per_page=100";
+    $uri .= "wp-json/wp/v2/$type?per_page=100&page=$page";
     return $uri;
 }
 
@@ -156,6 +156,19 @@ sub _inflate_speaker ( $s ) {
     );
 
     sub _inflate_session ( $s, $speakers ) {
+
+        # Split all day tutorials into two sessions.
+        if ( $s->{length} == 480 && $s->{is_tutorial} ) {
+            $s->{length} = 180;
+            my %copy = %{$s};
+            my $dt   = $p->parse_datetime( $s->{starts_at} );
+            $copy{starts_at}
+                = $dt->set( hour => 13, minute => 30 )
+                ->format_cldr('YYYY-MM-dd HH:mm:ss');
+
+            return map { _inflate_session( $_, $speakers ) } $s, \%copy;
+        }
+
         my $dt = $p->parse_datetime( $s->{starts_at} );
         return {
             id        => $s->{id},
@@ -165,9 +178,9 @@ sub _inflate_speaker ( $s ) {
             presenter => $s->{presented_by}
             ? $speakers->{ $s->{presented_by}[0]{ID} }
             : q{},
-            is_tutorial => $s->{is_tutorial},
-            is_plenary  => $s->{is_plenary} && !ref $s->{is_plenary},
-            is_break    => $s->{is_break} && !ref $s->{is_break},
+            is_tutorial => $s->{is_tutorial} && !ref $s->{is_tutorial},
+            is_plenary  => $s->{is_plenary}  && !ref $s->{is_plenary},
+            is_break    => $s->{is_break}    && !ref $s->{is_break},
             date        => $dt->date,
             starts_at   => $dt,
             length      => $s->{length},
@@ -225,8 +238,8 @@ sub _unique_rooms ($s) {
         'Idaho'                   => 5,
         'Wyoming'                 => 6,
         'Casper'                  => 7,
-        'Sinclair'                => 8,
-        q{}                       => 9,
+        q{}                       => 8,
+        'Sinclair'                => 9,
     );
 
     sub _by_room {
