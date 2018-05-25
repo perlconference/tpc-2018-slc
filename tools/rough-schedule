@@ -6,12 +6,13 @@ use warnings;
 use feature 'postderef', 'signatures';
 no warnings 'experimental::postderef', 'experimental::signatures';
 
-use DateTime;
+use DateTime::Format::Human::Duration;
 use DateTime::Format::Strptime;
+use DateTime;
 use Getopt::Long;
 use JSON::MaybeXS;
-use List::AllUtils qw( uniq );
 use LWP::Simple qw( get is_success );
+use List::AllUtils qw( uniq );
 
 sub main {
     my ( $main, $test );
@@ -206,13 +207,14 @@ sub _cell_content ($s) {
     return $c;
 }
 
+my $dtfh = DateTime::Format::Human::Duration->new;
+
 sub _duration ($l) {
-    my ( $count, $unit )
-        = $l >= 120
-        ? ( $l / 60, 'hour' )
-        : ( $l, 'minute' );
-    $unit .= 's' unless $count == 1;
-    return "$count $unit";
+    return "1 hour" if $l == 60;
+
+    # We prefer something like "90 minutes" over "1 hour and 30 minutes".
+    return "$l minutes" if $l < 120;
+    return $dtfh->format_duration( DateTime::Duration->new( minutes => $l ) );
 }
 
 sub _unique_rooms ($s) {
