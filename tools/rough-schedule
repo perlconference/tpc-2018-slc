@@ -39,7 +39,7 @@ sub main {
         my $date = $p->parse_datetime($k)->format_cldr('EEEE, MMMM d');
         $list .= qq{<li><a href="#$k">$date</a></li>\n};
 
-        $list .= 'Wondering where the rooms are? <a href="http://saltlake.littleamerica.com/public/pdfs/main-floor-floormap-2015.pdf">Check out the floor plan</a>.'
+        $list .= 'Wondering where the rooms are? <a href="http://saltlake.littleamerica.com/public/pdfs/main-floor-floormap-2015.pdf">Check out the floor plan</a>.';
 
         $tables .= qq{<div id="schedule-$k" class="schedule-container">\n};
         $tables .= "<h3>$date</h3>\n";
